@@ -1,0 +1,44 @@
+# config.yaml — Copy this file to config.yaml and fill in your API key
+
+soniox:
+  api_key: "YOUR_SONIOX_API_KEY"
+  model: "stt-rt-preview"
+  language_hints:
+    - "vi"
+    - "en"
+  endpoint_detection: true
+  context_terms:
+    - "refactor"
+    - "debug"
+    - "commit"
+    - "push"
+    - "merge"
+    - "function"
+    - "component"
+    - "API"
+    - "deploy"
+
+tmux:
+  session_name: "voice-claude"
+  auto_create: true
+  auto_run_claude: true
+
+overlay:
+  width: 350
+  height: 120
+  opacity: 0.85
+  position: "bottom-right"
+  theme: "dark"
+
+voice:
+  mode: "push_to_talk"
+  hotkey: "F5"
+  auto_send: true
+  auto_send_delay_ms: 500
+
+vad:
+  enabled: false
+  aggressiveness: 2        # 0-3, higher = filters more silence
+  pre_roll_frames: 3       # Keep 300ms before speech starts
+  hangover_frames: 5       # Keep 500ms after speech ends
+  speech_threshold: 0.6    # 3/5 sub-frames must be speech
