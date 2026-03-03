@@ -81,28 +81,18 @@ class VoiceClaudeApp:
         # Wire callbacks
         self._overlay.on_mic_toggle = self._handle_mic_toggle
         self._overlay.on_close = self._handle_close
+        self._overlay.on_session_select = self._handle_session_select
 
-        # Connect to tmux
+        # Show setup screen (instead of auto-connecting)
         if not self._tmux.check_tmux_installed():
             self._overlay.set_state(
                 UIState.ERROR, "tmux not installed (brew install tmux)"
             )
-        elif not self._tmux.connect():
-            self._overlay.set_state(
-                UIState.DISCONNECTED,
-                "No tmux session found",
-            )
         else:
-            self._overlay.set_state(
-                UIState.IDLE,
-                f"Connected: {self._tmux.session_name}",
-            )
+            self._show_setup()
 
         # Start polling transcript queue
         self._poll_transcript()
-
-        # Start tmux health check
-        self._schedule_health_check()
 
         # Bind hotkey on the overlay window (works when focused, no Accessibility needed)
         hotkey_name = self._config.voice.hotkey
@@ -117,6 +107,48 @@ class VoiceClaudeApp:
         log.info("Starting overlay mainloop")
         self._overlay.mainloop()
 
+    # --- Setup ---
+
+    def _state_is_setup(self) -> bool:
+        return self._overlay and self._overlay._state == UIState.SETUP
+
+    def _show_setup(self) -> None:
+        """Show the setup screen with tmux session dropdown."""
+        sessions_raw = self._tmux.list_sessions()
+        # Deduplicate, prioritize sessions with "claude" in name or command
+        seen = set()
+        claude_sessions = []
+        other_sessions = []
+        for entry in sessions_raw:
+            name = entry["session"]
+            if name in seen:
+                continue
+            seen.add(name)
+            cmd = entry.get("command", "").lower()
+            if "claude" in name.lower() or "claude" in cmd:
+                claude_sessions.append(name)
+            else:
+                other_sessions.append(name)
+
+        # Claude sessions first, then the rest
+        session_names = claude_sessions + other_sessions
+
+        self._overlay.set_state(UIState.SETUP)
+        self._overlay.show_setup(session_names)
+
+    def _handle_session_select(self, session_name: str) -> None:
+        """Handle user selecting a tmux session from the dropdown."""
+        self._tmux._session_name = session_name
+        self._tmux._connected = True
+
+        self._overlay.hide_setup()
+        self._overlay.set_state(
+            UIState.IDLE,
+            f"Connected: {self._tmux.session_name}",
+        )
+        self._schedule_health_check()
+        log.info(f"Session selected: {self._tmux.session_name}")
+
     # --- Mic toggle ---
 
     def _handle_mic_toggle(self) -> None:
@@ -129,6 +161,9 @@ class VoiceClaudeApp:
     def _start_listening(self) -> None:
         """Start recording + STT."""
         if self._listening:
+            return
+
+        if self._state_is_setup():
             return
 
         if not self._tmux.is_connected:

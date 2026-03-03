@@ -15,6 +15,7 @@ POSITION_CACHE = Path(".window_position.json")
 
 
 class UIState(enum.Enum):
+    SETUP = "setup"
     IDLE = "idle"
     LISTENING = "listening"
     SENDING = "sending"
@@ -69,6 +70,13 @@ THEMES = {
 def _state_styles(t: dict) -> dict:
     """Build per-state styles from a theme palette."""
     return {
+        UIState.SETUP: {
+            "status_text": "Setup",
+            "status_color": t["orange"],
+            "mic_color": t["muted"],
+            "mic_hover": t["muted"],
+            "mic_text": "\U0001f3a4",
+        },
         UIState.IDLE: {
             "status_text": "Bam de noi",
             "status_color": t["green"],
@@ -157,10 +165,13 @@ class OverlayWindow(ctk.CTk):
         self._t = THEMES[self._theme_name]
         self._styles = _state_styles(self._t)
 
+        self._setup_height = 72  # Height when in SETUP state
+
         # Callbacks (set by app orchestrator)
         self.on_mic_toggle: Callable | None = None
         self.on_close: Callable | None = None
         self.on_reconnect: Callable | None = None
+        self.on_session_select: Callable[[str], None] | None = None
 
         # Animation state
         self._pulse_job: str | None = None
@@ -173,8 +184,8 @@ class OverlayWindow(ctk.CTk):
 
         self.overrideredirect(True)
         self.attributes("-topmost", True)
-        self.attributes("-alpha", opacity if self._theme_name == "light" else 0.80)
-        self.configure(fg_color=self._t["bg"])
+        self.attributes("-alpha", 1.0)
+        self.configure(fg_color=self._t["card"])
 
         self.geometry(f"{width}x{height}")
         self._set_initial_position()
@@ -182,9 +193,9 @@ class OverlayWindow(ctk.CTk):
         # --- Main frame (glassmorphism card) ---
         self._frame = ctk.CTkFrame(
             self, fg_color=self._t["card"], corner_radius=12,
-            border_width=1, border_color=self._t["border"],
+            border_width=2, border_color=self._t["muted"],
         )
-        self._frame.pack(fill="both", expand=True, padx=2, pady=2)
+        self._frame.pack(fill="both", expand=True, padx=0, pady=0)
 
         # Make draggable
         self._frame.bind("<ButtonPress-1>", self._on_drag_start)
@@ -244,6 +255,44 @@ class OverlayWindow(ctk.CTk):
         )
         # Not packed — shown only when there's text
 
+        # --- Setup row (dropdown + Connect button, hidden by default) ---
+        self._setup_row = ctk.CTkFrame(self._frame, fg_color="transparent")
+        self._tmux_label = ctk.CTkLabel(
+            self._setup_row, text="tmux:",
+            font=("SF Pro Display", 11),
+            text_color=self._t["text_secondary"],
+        )
+        self._tmux_label.pack(side="left", padx=(0, 4))
+        self._session_var = ctk.StringVar(value="")
+        self._session_dropdown = ctk.CTkOptionMenu(
+            self._setup_row,
+            variable=self._session_var,
+            values=[""],
+            width=180, height=26,
+            font=("SF Pro Display", 11),
+            fg_color=self._t["border"],
+            button_color=self._t["border"],
+            button_hover_color=self._t["muted"],
+            dropdown_fg_color=self._t["bg"],
+            dropdown_hover_color=self._t["border"],
+            dropdown_text_color=self._t["text_primary"],
+            text_color=self._t["text_primary"],
+            corner_radius=6,
+        )
+        self._session_dropdown._dropdown_menu._corner_radius = 4
+        self._session_dropdown.pack(side="left", fill="x", expand=True, padx=(0, 6))
+        self._connect_btn = ctk.CTkButton(
+            self._setup_row, text="Connect", width=70, height=26,
+            font=("SF Pro Display", 11),
+            fg_color=self._t["accent"],
+            hover_color=self._t["accent_hover"],
+            text_color="#ffffff",
+            corner_radius=6,
+            command=self._handle_connect,
+        )
+        self._connect_btn.pack(side="right")
+        # Not packed yet — shown only during SETUP state
+
         # --- Countdown label (hidden by default) ---
         self._countdown_label = ctk.CTkLabel(
             self._frame, text="",
@@ -254,6 +303,24 @@ class OverlayWindow(ctk.CTk):
     # -----------------------------------------------------------------------
     # Public API
     # -----------------------------------------------------------------------
+
+    def show_setup(self, sessions: list[str]) -> None:
+        """Show the setup dropdown with a list of tmux sessions."""
+        if sessions:
+            self._session_var.set(sessions[0])
+            self._session_dropdown.configure(values=sessions)
+        else:
+            self._session_var.set("")
+            self._session_dropdown.configure(values=[""])
+        self._setup_row.pack(fill="x", padx=8, pady=(0, 3))
+        self.geometry(f"{self._width}x{self._setup_height}")
+        self._mic_btn.configure(state="disabled")
+
+    def hide_setup(self) -> None:
+        """Hide the setup dropdown (after connecting)."""
+        self._setup_row.pack_forget()
+        self.geometry(f"{self._width}x{self._height}")
+        self._mic_btn.configure(state="normal")
 
     def set_state(self, state: UIState, message: str | None = None) -> None:
         """Update the visual state of the overlay with smooth transition."""
@@ -282,7 +349,7 @@ class OverlayWindow(ctk.CTk):
         )
 
         # Enable/disable mic button
-        if state in (UIState.SENDING,):
+        if state in (UIState.SENDING, UIState.SETUP):
             self._mic_btn.configure(state="disabled")
         else:
             self._mic_btn.configure(state="normal")
@@ -442,6 +509,11 @@ class OverlayWindow(ctk.CTk):
     def _handle_mic_toggle(self) -> None:
         if self.on_mic_toggle:
             self.on_mic_toggle()
+
+    def _handle_connect(self) -> None:
+        session = self._session_var.get()
+        if session and self.on_session_select:
+            self.on_session_select(session)
 
     def _handle_close(self) -> None:
         self.save_position()
